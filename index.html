@@ -95,7 +95,7 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const cv=$('cv'),ctx=cv.getContext('2d');
 const ROOM='lbkov26-q7x4m-oda';
-const PICK_TIME=20,GAME_TIME=300, P_SPEED=4.0, E_SPEED=5.4, CATCH=0.85;
+const PICK_TIME=20,GAME_TIME=300, P_SPEED=4.0, E_SPEED=4.4, CATCH=0.85;
 
 // ---------- shared maze ----------
 let TW,TH,grid,T=20,START,seed=1;
