@@ -29,7 +29,7 @@
   .k{background:#2f6b3d;border:2px solid #5fae6c;border-radius:12px;color:#fff;font-size:26px;display:flex;align-items:center;justify-content:center;touch-action:none}
   .k.on{background:#ffd43c;color:#16341f}
   #side{display:flex;flex-direction:row;gap:8px;flex:1}
-  #side button{flex:1}
+  #side button{flex:1;padding:11px 6px;font-size:14px}
   #hint{display:none;flex:1;text-align:center;font-weight:700;color:#b9d6be;font-size:14px}
   #arrow{position:fixed;pointer-events:none;font-size:46px;opacity:0;transform:translate(-50%,-50%);transition:opacity .4s;text-shadow:0 2px 6px #000;z-index:4}
   button.b{background:#ffd43c;color:#16341f;border:0;border-radius:12px;padding:11px 10px;font-weight:800;font-size:15px;font-family:inherit}
@@ -62,6 +62,7 @@
   <div id="ctrl">
     <div id="side">
       <button class="b" id="bHostMenu">👥 Oyuncular</button>
+      <button class="b g" id="bMode">🎲 Klasik</button>
       <button class="b g" id="bStart">▶ Başlat</button>
     </div>
     <div id="hint">👆 Parmağını ekranda kaydırarak yönlendir</div>
@@ -95,6 +96,7 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const cv=$('cv'),ctx=cv.getContext('2d');
 const ROOM='lbkov26-q7x4m-oda';
+const ZCOL='#7cc242';
 const PICK_TIME=20,GAME_TIME=300, P_SPEED=4.0, E_SPEED=4.4, CATCH=0.85;
 
 // ---------- shared maze ----------
@@ -120,6 +122,13 @@ function bfs(sx,sy){const d=new Int16Array(TW*TH).fill(-1),q=[sx+sy*TW];d[q[0]]=
     for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){const nx=x+dx,ny=y+dy;if(isFloor(nx,ny)&&d[nx+ny*TW]<0){d[nx+ny*TW]=d[p]+1;q.push(nx+ny*TW)}}}
   return d;}
 
+function losSet(sx,sy,R){const vis=new Set();
+  for(let y=Math.floor(sy-R)-1;y<=Math.ceil(sy+R)+1;y++)for(let x=Math.floor(sx-R)-1;x<=Math.ceil(sx+R)+1;x++){
+    if(x<0||y<0||x>=TW||y>=TH||Math.hypot(x-sx,y-sy)>R)continue;
+    const n=Math.ceil(Math.max(Math.abs(x-sx),Math.abs(y-sy))*3)+1;let ok=true;
+    for(let k=1;k<n;k++){const t=k/n,cx=Math.round(sx+(x-sx)*t),cy=Math.round(sy+(y-sy)*t);if(!isFloor(cx,cy)&&!(cx===x&&cy===y)){ok=false;break}}
+    if(ok)vis.add(x+y*TW)}
+  return vis}
 // ---------- drawing ----------
 let bgCache=null;
 function resize(){
@@ -155,8 +164,9 @@ function render(view){ // view: {phase,ebe:{x,y,dx,dy},players:[{id,x,y,dx,dy,ou
   ctx.clearRect(0,0,T*TW,T*TH);ctx.drawImage(bgCache,0,0,T*TW,T*TH);
   const e=view.ebe;
   if(e&&view.phase==='play'){ctx.strokeStyle='rgba(230,50,50,.4)';ctx.lineWidth=2;ctx.setLineDash([4,4]);ctx.beginPath();ctx.arc(e.x*T+T/2,e.y*T+T/2,T*CATCH,0,7);ctx.stroke();ctx.setLineDash([])}
-  for(const p of view.players)if(!p.out&&p.id!==view.me)drawChar(p.x,p.y,p.dx,p.dy,p.col,p.name,T*.38,false,false);
-  const mine=view.players.find(p=>p.id===view.me&&!p.out);if(mine)drawChar(mine.x,mine.y,mine.dx,mine.dy,mine.col,'SEN',T*.42,false,true);
+  if(view.fog)view.fog();
+  for(const p of view.players)if(!p.out&&p.id!==view.me)drawChar(p.x,p.y,p.dx,p.dy,p.z?ZCOL:p.col,p.z?'🧟'+p.name:p.name,T*.38,false,false);
+  const mine=view.players.find(p=>p.id===view.me&&!p.out);if(mine)drawChar(mine.x,mine.y,mine.dx,mine.dy,mine.z?ZCOL:mine.col,mine.z?'SEN 🧟':'SEN',T*.42,false,true);
   if(e)drawChar(e.x,e.y,e.dx,e.dy,'#e23838','EBE',T*.48,view.phase!=='play',false);
   for(const q of pops){ctx.globalAlpha=Math.max(0,1-q.t/1.5);ctx.font=`900 ${Math.max(12,T*.75)}px system-ui`;ctx.textAlign='center';ctx.textBaseline='middle';
     const px=Math.min(Math.max(q.x*T+T/2,80),T*TW-80),py=q.y*T-T*.8-q.t*20;
@@ -228,27 +238,32 @@ function startHost(){
   const players=new Map(); // id -> {conn,name,col,status:'in'|'out'|'left',placed,...}
   let phase='lobby',timeLeft=GAME_TIME,count=0,nextId=1,colorI=0,lastSend=0,ebeDist=bfs(START[0],START[1]),ebeKey='';
   onDir=d=>{if(phase==='play'){ebe.want=d;reverseIfWanted(ebe)}};
+  const MODES=[{n:'Klasik',z:0,f:0,i:'🎲'},{n:'Zombi',z:1,f:0,i:'🧟'},{n:'Sis',z:0,f:1,i:'🌫️'},{n:'Zombi + Sis',z:1,f:1,i:'🧟🌫️'}];
+  let modeI=0;const mode=()=>MODES[modeI];
+  const modeInfo=m=>m.z&&m.f?'Yakalanan zombi olur, ebe sadece yakınını görür!':m.z?'Yakalanan zombi olur ve ebeye yardım eder!':m.f?'Ebe sadece yakınını görür, iyi saklanın!':'Yakalanan elenir.';
+  $('bMode').onclick=()=>{if(phase!=='lobby'&&phase!=='over'){feed('Mod sadece oyunlar arasında değişir.');return}
+    modeI=(modeI+1)%MODES.length;$('bMode').textContent=mode().i+' '+mode().n;feed(`Mod: ${mode().n} – ${modeInfo(mode())}`);banner();broadcast({t:'mode',n:mode().n,z:mode().z,f:mode().f,info:modeInfo(mode())})};
   const link=location.host+location.pathname;
   const banner=()=>{const b=$('banner');b.classList.remove('hide');
-    if(phase==='lobby'){b.style.background='#ffd43c';b.innerHTML=`🔓 KATILIM AÇIK – linke gir:<span class="code" style="font-size:17px;letter-spacing:0">${esc(link)}</span>`}
+    if(phase==='lobby'){b.style.background='#ffd43c';b.innerHTML=`${mode().i} Mod: ${mode().n} · 🔓 KATILIM AÇIK – linke gir:<span class="code" style="font-size:17px;letter-spacing:0">${esc(link)}</span>`}
     else if(phase==='count'){b.style.background='#ffd43c';b.innerHTML=`⏳ OYUN <span style="font-size:26px">${Math.max(0,Math.ceil(count))}</span> SN SONRA BAŞLIYOR – yerinizi seçin!<br><span style="font-weight:600">Son katılım: ${esc(link)}</span>`}
     else if(phase==='over'){b.style.background='#ffd43c';b.innerHTML='Oyun bitti. Yeni oyunda katılım tekrar açılacak.'}
-    else{b.style.background='#ff8a8a';b.innerHTML='🔒 KATILIM KAPALI – oyun devam ediyor. Bir sonraki oyunu bekleyin!'}};
+    else{b.style.background='#ff8a8a';b.innerHTML=`${mode().i} ${mode().n} · 🔒 KATILIM KAPALI – bir sonraki oyunu bekleyin!`}};
   banner();
   $('bHostMenu').onclick=()=>{drawLobby();$('ovHost').classList.remove('hide')};
   $('bCloseHost').onclick=()=>$('ovHost').classList.add('hide');
   const list=st=>[...players.values()].filter(p=>st.includes(p.status));
   $('bStart').onclick=()=>{
     if(phase==='lobby'||phase==='over'){
-      if(!list(['in','out']).length){feed('Henüz oyuncu yok!');return}
+      if(!list(['in','out','zombie']).length){feed('Henüz oyuncu yok!');return}
       if(phase==='over'){
         seed=Math.floor(Math.random()*1e9);makeMaze(seed,cw,ch);
-        for(const p of list(['in','out'])){p.status='in';p.placed=false}
+        for(const p of list(['in','out','zombie'])){p.status='in';p.placed=false}
         Object.assign(ebe,{x:START[0],y:START[1],tx:START[0],ty:START[1],dx:0,dy:-1,want:null});ebeDist=bfs(START[0],START[1]);
         broadcast({t:'maze',seed,cw,ch});phase='lobby';big('');banner();$('bStart').textContent='▶ Başlat';
         feed('🔓 Katılım açıldı! Herkes yerini seçsin.');return;
       }
-      phase='count';count=PICK_TIME;timeLeft=GAME_TIME;$('bStart').textContent='■ Bitir';banner();feed('⏳ 20 saniye: herkes yerini seçsin!');
+      phase='count';count=PICK_TIME;timeLeft=GAME_TIME;$('bStart').textContent='■ Bitir';banner();feed('⏳ 20 saniye: herkes yerini seçsin!');feed(`${mode().i} Mod: ${mode().n} – ${modeInfo(mode())}`);
     }else endGame('stop');
   };
   function freeSpot(x,y,self){
@@ -263,7 +278,7 @@ function startHost(){
     const [x,y]=xy;Object.assign(p,{x,y,tx:x,ty:y,dx:0,dy:1,speed:P_SPEED,want:null,placed:true});send(p,{t:'placed',x,y});
   }
   function drawLobby(){
-    const arr=list(['in','out']);
+    const arr=list(['in','out','zombie']);
     $('hostInfo').textContent=`Oyunda ${arr.length} kişi. Birini çıkarmak için ✕'ye bas.`;
     $('lobby').innerHTML='';
     for(const p of arr){const d=document.createElement('div');d.className='pl';
@@ -275,15 +290,18 @@ function startHost(){
   function kick(p){send(p,{t:'kicked'});p.status='left';setTimeout(()=>{try{p.conn.close()}catch(e){}},300);sendRoster()}
   function send(p,m){try{if(p.conn&&p.conn.open)p.conn.send(m)}catch(e){}}
   function broadcast(m){for(const p of players.values())if(p.status!=='left')send(p,m)}
-  function sendRoster(){broadcast({t:'roster',list:list(['in','out']).map(p=>[p.id,p.name,p.col])})}
-  function eliminate(p){p.status='out';pops.push({x:p.x,y:p.y,t:0,txt:p.name+' YAKALANDI!'});feed(`❌ ${p.name} yakalandı!`,p.col);beep(880,.1,.18);beep(1320,.2,.18,.1);send(p,{t:'caught'})}
+  function sendRoster(){broadcast({t:'roster',list:list(['in','out','zombie']).map(p=>[p.id,p.name,p.col,p.status==='zombie'?1:0])})}
+  function eliminate(p,by){
+    if(mode().z){p.status='zombie';p.speed=P_SPEED*1.05;p.want=null;pops.push({x:p.x,y:p.y,t:0,txt:p.name+' ZOMBİ OLDU!'});feed(`🧟 ${p.name} zombi oldu!`+(by?` (${by})`:''),ZCOL);send(p,{t:'zombie'})}
+    else{p.status='out';pops.push({x:p.x,y:p.y,t:0,txt:p.name+' YAKALANDI!'});feed(`❌ ${p.name} yakalandı!`,p.col);send(p,{t:'caught'})}
+    beep(880,.1,.18);beep(1320,.2,.18,.1);sendRoster()}
   function endGame(reason){
     phase='over';const alive=list(['in']).filter(p=>p.placed);
     let t,s;
-    if(!alive.length&&reason!=='stop'){t='EBE KAZANDI! 🎉';s='Herkes yakalandı!'}
+    if(!alive.length&&reason!=='stop'){t=mode().z?'EBE VE ZOMBİLER KAZANDI! 🧟':'EBE KAZANDI! 🎉';s='Herkes yakalandı!'}
     else if(reason==='time'){t=alive.length===1?'🏆 '+alive[0].name+' KAZANDI!':'🏆 OYUNCULAR KAZANDI!';s='Süre bitti. Kazananlar: '+alive.map(p=>p.name).join(', ')}
     else{t='OYUN DURDURULDU';s=''}
-    big(t,s);broadcast({t:'end',title:t,sub:s,win:reason==='time'?alive.map(p=>p.id):[]});
+    big(t,s);broadcast({t:'end',title:t,sub:s,win:reason==='time'?alive.map(p=>p.id):(!alive.length&&reason!=='stop'?list(['zombie']).map(p=>p.id):[])});
     [523,659,784,1047].forEach((f,i)=>beep(f,.3,.15,i*.15));$('bStart').textContent='↻ Yeni oyun';banner();
   }
 
@@ -305,11 +323,11 @@ function startHost(){
         if(m.t==='hello'&&!p){
           if(phase!=='lobby'&&phase!=='count'){try{conn.send({t:'full',why:phase==='over'?'Oyun yeni bitti. Yayıncı yeni oyunu açınca tekrar dene.':'Oyun başladı, katılım kapalı. Bu oyun bitince tekrar dene.'})}catch(e){}setTimeout(()=>{try{conn.close()}catch(e){}},500);return}
           let name=String(m.name||'Oyuncu').replace(/\s+/g,' ').trim().slice(0,18)||'Oyuncu';
-          const names=new Set(list(['in','out']).map(q=>q.name.toLowerCase()));
+          const names=new Set(list(['in','out','zombie']).map(q=>q.name.toLowerCase()));
           let n=name,i=2;while(names.has(n.toLowerCase()))n=name.slice(0,15)+' '+(i++);
           p={id:nextId++,conn,name:n,col:palette[(colorI++)%palette.length],status:'in',placed:false,x:1,y:1,tx:1,ty:1,dx:0,dy:1,speed:P_SPEED,want:null};
           players.set(p.id,p);
-          send(p,{t:'welcome',id:p.id,name:n,seed,cw,ch,ph:phase});sendRoster();
+          send(p,{t:'welcome',id:p.id,name:n,seed,cw,ch,ph:phase,mode:{n:mode().n,z:mode().z,f:mode().f,info:modeInfo(mode())}});sendRoster();
           feed(`➕ ${n} katıldı`,p.col);beep(700,.1,.12);
           if(!$('ovHost').classList.contains('hide'))drawLobby();
         }else if(m.t==='pick'&&p&&p.status==='in'){
@@ -318,7 +336,7 @@ function startHost(){
           const x=m.x|0,y=m.y|0,why=freeSpot(x,y,p);
           if(why){send(p,{t:'pickno',why});return}
           place(p,[x,y]);
-                  }else if(m.t==='dir'&&p&&p.status==='in'&&p.placed&&Array.isArray(m.d)){
+                  }else if(m.t==='dir'&&p&&(p.status==='in'||p.status==='zombie')&&p.placed&&Array.isArray(m.d)){
           const d=[Math.sign(+m.d[0])|0,Math.sign(+m.d[1])|0];if(Math.abs(d[0])+Math.abs(d[1])===1){p.want=d;reverseIfWanted(p)}
         }
       });
@@ -329,10 +347,10 @@ function startHost(){
 
   // ---- loop ----
   let last=performance.now();
-  const r2=v=>Math.round(v*100)/100;
+  const r2=v=>Math.round(v*100)/100;let fogKey='',fogVis=new Set();
   function loop(now){
     const dt=Math.min(.05,(now-last)/1000);last=now;
-    const active=list(['in']).filter(p=>p.placed);
+    const active=list(['in']).filter(p=>p.placed),zombies=list(['zombie']);
     if(phase==='lobby'){
       if(!list(['in']).length)big('Oyuncular bekleniyor…','Linke girip "Oyuna katıl"a basın!');
       else big('','');
@@ -345,18 +363,29 @@ function startHost(){
     if(phase==='play'){
       stepEnt(ebe,dt);
       const k=Math.round(ebe.x)+','+Math.round(ebe.y);if(k!==ebeKey){ebeKey=k;ebeDist=bfs(Math.round(ebe.x),Math.round(ebe.y))}
-      for(const p of active){stepEnt(p,dt);if(Math.hypot(p.x-ebe.x,p.y-ebe.y)<CATCH)eliminate(p)}
+      for(const z of zombies)stepEnt(z,dt);
+      for(const p of active){stepEnt(p,dt);
+        if(Math.hypot(p.x-ebe.x,p.y-ebe.y)<CATCH){eliminate(p);continue}
+        for(const z of zombies)if(Math.hypot(p.x-z.x,p.y-z.y)<CATCH){eliminate(p,z.name+' yakaladı');break}}
       timeLeft-=dt;
       const stillIn=list(['in']).filter(p=>p.placed).length;
-      if(!stillIn&&list(['out']).length)endGame('all');
+      if(!stillIn&&list(['out','zombie']).length)endGame('all');
       else if(timeLeft<=0){timeLeft=0;endGame('time')}
     }
     pops=pops.filter(q=>(q.t+=dt)<1.5);
-    const vis=list(['in']).filter(p=>p.placed);
-    render({phase,ebe,players:vis.map(p=>({id:p.id,x:p.x,y:p.y,dx:p.dx,dy:p.dy,out:false,name:p.name,col:p.col})),me:-1});
-    $('sLeft').textContent=list(['in']).length;$('sOut').textContent=list(['out']).length;$('sTime').textContent=fmt(phase==='lobby'||phase==='count'?GAME_TIME:timeLeft);
+    const vis=list(['in','zombie']).filter(p=>p.placed);
+    let shown=vis,fogFn=null;
+    if(mode().f){
+      const hunters=[ebe,...list(['zombie'])];
+      const key=hunters.map(h=>Math.round(h.x)+','+Math.round(h.y)).join('|');
+      if(key!==fogKey){fogKey=key;fogVis=new Set();for(const h of hunters)for(const v of losSet(h.x,h.y,4.6))fogVis.add(v)}
+      shown=vis.filter(p=>p.status==='zombie'||(phase==='play'&&fogVis.has(Math.round(p.x)+Math.round(p.y)*TW)));
+      fogFn=()=>{ctx.fillStyle='rgba(8,18,12,.93)';for(let y=0;y<TH;y++)for(let x=0;x<TW;x++)if(!fogVis.has(x+y*TW))ctx.fillRect(x*T,y*T,T,T)};
+    }
+    render({phase,ebe,players:shown.map(p=>({id:p.id,x:p.x,y:p.y,dx:p.dx,dy:p.dy,out:false,z:p.status==='zombie',name:p.name,col:p.col})),me:-1,fog:fogFn});
+    $('sLeft').textContent=list(['in']).length;$('sOut').textContent=list(['out','zombie']).length;$('sTime').textContent=fmt(phase==='lobby'||phase==='count'?GAME_TIME:timeLeft);
     if(now-lastSend>66){lastSend=now;
-      broadcast({t:'s',pc:Math.max(0,Math.ceil(count)),n:[list(['in']).length,list(['out']).length],ph:phase,tl:Math.round(timeLeft*10)/10,e:[r2(ebe.x),r2(ebe.y),ebe.dx,ebe.dy],p:vis.map(p=>[p.id,r2(p.x),r2(p.y),p.dx,p.dy])})}
+      broadcast({t:'s',pc:Math.max(0,Math.ceil(count)),n:[list(['in']).length,list(['out','zombie']).length],ph:phase,tl:Math.round(timeLeft*10)/10,e:[r2(ebe.x),r2(ebe.y),ebe.dx,ebe.dy],p:vis.map(p=>[p.id,r2(p.x),r2(p.y),p.dx,p.dy,p.status==='zombie'?1:0])})}
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
@@ -369,43 +398,47 @@ function startHost(){
 function startPlayer(name){
   $('err').textContent='Oyuna bağlanılıyor…';$('bJoin').disabled=true;
   const peer=new Peer(undefined,{debug:0});
-  let pc=0,rejected=false,counts=[0,0],conn=null,me=null,roster=new Map(),view={phase:'lobby',ebe:null,players:[],me:-1},target=new Map(),ebeT=null,tl=GAME_TIME,status='connecting',gotAny=false,placed=false,hint=null;
+  let zmode=null,pc=0,rejected=false,counts=[0,0],conn=null,me=null,roster=new Map(),view={phase:'lobby',ebe:null,players:[],me:-1},target=new Map(),ebeT=null,tl=GAME_TIME,status='connecting',gotAny=false,placed=false,hint=null;
   $('side').classList.add('hide');$('hint').style.display='block';
   const fail=t=>{$('err').textContent=t;$('bJoin').disabled=false;try{peer.destroy()}catch(e){}};
   const tmo=setTimeout(()=>{if(!gotAny)fail('Oyuna bağlanılamadı. Yayıncı oyunu açmamış olabilir ya da internetin buna izin vermiyor olabilir. Wi-Fi / mobil veri değiştirip tekrar dene.')},15000);
   peer.on('error',e=>{if(!gotAny){clearTimeout(tmo);fail(e.type==='peer-unavailable'?'Şu an açık oyun yok. Yayıncı oyunu açınca tekrar dene.':'Bağlantı hatası: '+(e.type||e))}else feed('Bağlantı sorunu…')});
   const setBanner=()=>{const b=$('banner');
     if(status==='out')b.textContent='Yakalandın. Oyunu izliyorsun.';
+    else if(status==='zombie')b.textContent='🧟 Zombisin! Parmağını kaydır, kalanları yakala!';
     else if(view.phase==='count')b.innerHTML=`⏳ <span style="font-size:24px">${pc}</span> sn – ${placed?'Yerin hazır, istersen değiştir!':'👇 Başlamak istediğin yere dokun!'}`;
     else if(!placed)b.textContent='👇 Labirentte başlamak istediğin yere dokun! (Oyun başlayınca katılım kapanır)';
     else if(view.phase==='lobby')b.textContent='Yerin hazır! İstersen başka yere dokunup değiştir. Yayıncının başlatması bekleniyor…';
-    else b.textContent='Sen parlayan "SEN" karakterisin. Parmağını kaydırarak ebeden kaç!'};
+    else b.textContent='Sen parlayan "SEN" karakterisin. Parmağını kaydırarak ebeden'+(zmode&&zmode.z?' ve zombilerden':'')+' kaç!'};
+  const showMode=()=>{if(zmode)feed(`Mod: ${zmode.n} – ${zmode.info}`)};
   peer.on('open',()=>{
     conn=peer.connect(ROOM,{reliable:false,serialization:'json'});
     conn.on('open',()=>conn.send({t:'hello',name}));
     conn.on('data',m=>{
       if(m.t==='full'){clearTimeout(tmo);gotAny=true;rejected=true;$('err').textContent='🔒 '+m.why;$('bJoin').disabled=false;$('bJoin').textContent='🔄 Tekrar dene';try{peer.destroy()}catch(e){}return}
       if(!gotAny){gotAny=true;clearTimeout(tmo);$('ovStart').classList.add('hide');$('banner').classList.remove('hide')}
-      if(m.t==='welcome'){me=m.id;status='in';view.phase=m.ph;makeMaze(m.seed,m.cw,m.ch);feed('Hoş geldin '+m.name+'!');beep(700,.1,.12);setBanner()}
+      if(m.t==='welcome'){me=m.id;status='in';view.phase=m.ph;zmode=m.mode;setTimeout(showMode,600);makeMaze(m.seed,m.cw,m.ch);feed('Hoş geldin '+m.name+'!');beep(700,.1,.12);setBanner()}
       else if(m.t==='maze'){makeMaze(m.seed,m.cw,m.ch);placed=false;status='in';target.clear();big('');setBanner()}
+      else if(m.t==='mode'){zmode=m;showMode();beep(600,.08,.1)}
       else if(m.t==='closed'){feed('🔒 Oyun başladı, katılım kapandı.')}
       else if(m.t==='placed'){placed=true;hint=null;beep(880,.08,.12);setBanner()}
       else if(m.t==='pickno'){feed('⚠ '+m.why);beep(250,.15,.12)}
-      else if(m.t==='roster'){roster=new Map(m.list.map(([id,n,c])=>[id,{name:n,col:c}]))}
+      else if(m.t==='roster'){roster=new Map(m.list.map(([id,n,c,z])=>[id,{name:n,col:c,z}]))}
       else if(m.t==='s'){
         if(view.phase!==m.ph){if(m.ph==='count'){feed('⏳ 20 saniye içinde yerini seç!');beep(660,.12,.15)}if(m.ph==='play'){big('');beep(990,.25,.18)}view.phase=m.ph;setBanner()}
         tl=m.tl;ebeT=m.e;if(m.n)counts=m.n;if(m.ph==='count'){if(m.pc!==pc){pc=m.pc;setBanner();if(pc<=3&&pc>0){big(String(pc),placed?'Hazır ol!':'Hemen yer seç!');beep(880,.1,.15)}}}const seen=new Set();
-        for(const [id,x,y,dx,dy] of m.p){seen.add(id);const o=target.get(id);if(o){o.tx=x;o.ty=y;o.dx=dx;o.dy=dy}else target.set(id,{id,x,y,tx:x,ty:y,dx,dy})}
+        for(const [id,x,y,dx,dy,z] of m.p){seen.add(id);const o=target.get(id);if(o){o.tx=x;o.ty=y;o.dx=dx;o.dy=dy;o.z=z}else target.set(id,{id,x,y,tx:x,ty:y,dx,dy,z})}
         for(const id of [...target.keys()])if(!seen.has(id))target.delete(id);
         if(seen.has(me)&&!placed){placed=true;setBanner()}
       }
+      else if(m.t==='zombie'){status='zombie';big('ZOMBİ OLDUN! 🧟','Artık sen de avcısın, kalanları yakala!');beep(300,.3,.2);setTimeout(()=>big(''),2500);setBanner()}
       else if(m.t==='caught'){status='out';big('YAKALANDIN! 😵','Oyunu izlemeye devam edebilirsin.');beep(300,.4,.2);setBanner()}
       else if(m.t==='end'){const won=m.win.includes(me);view.phase='over';big(m.title,(won?'Tebrikler, kazandın! ':'')+(m.sub||''));beep(won?1047:400,.4,.18);$('banner').textContent='Yayıncı yeni oyunu başlatınca tekrar yer seçeceksin.'}
       else if(m.t==='kicked'){big('Oyundan çıkarıldın','');status='out';try{conn.close()}catch(e){}}
     });
     conn.on('close',()=>{if(!rejected&&status!=='out')big('Bağlantı koptu','Sayfayı yenileyip tekrar katılabilirsin.')});
   });
-  onDir=d=>{if(conn&&conn.open&&status==='in'&&placed)conn.send({t:'dir',d})};
+  onDir=d=>{if(conn&&conn.open&&(status==='in'||status==='zombie')&&placed)conn.send({t:'dir',d})};
   // tap to choose start spot
   let tapStart=null;cv.addEventListener('pointerdown',e=>tapStart=[e.clientX,e.clientY]);
   cv.addEventListener('pointerup',e=>{
@@ -421,7 +454,7 @@ function startPlayer(name){
     const dt=Math.min(.05,(now-last)/1000);last=now;const k=Math.min(1,dt*14);
     const ps=[];for(const o of target.values()){
       if(Math.abs(o.tx-o.x)+Math.abs(o.ty-o.y)>2){o.x=o.tx;o.y=o.ty}else{o.x+=(o.tx-o.x)*k;o.y+=(o.ty-o.y)*k}
-      const r=roster.get(o.id)||{name:'?',col:'#ccc'};ps.push({id:o.id,x:o.x,y:o.y,dx:o.dx,dy:o.dy,out:false,name:r.name,col:r.col})}
+      const r=roster.get(o.id)||{name:'?',col:'#ccc'};ps.push({id:o.id,x:o.x,y:o.y,dx:o.dx,dy:o.dy,out:false,z:!!o.z,name:r.name,col:r.col})}
     if(ebeT){if(!view.ebe)view.ebe={x:ebeT[0],y:ebeT[1]};const e=view.ebe;
       if(Math.abs(ebeT[0]-e.x)+Math.abs(ebeT[1]-e.y)>2){e.x=ebeT[0];e.y=ebeT[1]}else{e.x+=(ebeT[0]-e.x)*k;e.y+=(ebeT[1]-e.y)*k}e.dx=ebeT[2];e.dy=ebeT[3]}
     view.players=ps;view.me=me;
