@@ -7,7 +7,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{margin:0;height:100%;background:#16341f;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none}
+  html,body{touch-action:none;overscroll-behavior:none;margin:0;height:100%;background:#16341f;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none}
   #app{display:flex;flex-direction:column;height:100%;max-width:640px;margin:0 auto}
   header{padding:8px 12px 2px;text-align:center}
   h1{margin:0;font-size:21px}
@@ -28,7 +28,10 @@
   #pad{display:grid;grid-template-columns:64px 64px 64px;grid-template-rows:56px 56px;gap:6px;margin-left:auto}
   .k{background:#2f6b3d;border:2px solid #5fae6c;border-radius:12px;color:#fff;font-size:26px;display:flex;align-items:center;justify-content:center;touch-action:none}
   .k.on{background:#ffd43c;color:#16341f}
-  #side{display:flex;flex-direction:column;gap:8px;flex:1;max-width:190px}
+  #side{display:flex;flex-direction:row;gap:8px;flex:1}
+  #side button{flex:1}
+  #hint{display:none;flex:1;text-align:center;font-weight:700;color:#b9d6be;font-size:14px}
+  #arrow{position:fixed;pointer-events:none;font-size:46px;opacity:0;transform:translate(-50%,-50%);transition:opacity .4s;text-shadow:0 2px 6px #000;z-index:4}
   button.b{background:#ffd43c;color:#16341f;border:0;border-radius:12px;padding:11px 10px;font-weight:800;font-size:15px;font-family:inherit}
   button.g{background:#2f6b3d;color:#fff;border:2px solid #5fae6c}
   button.r{background:#c83a3a;color:#fff}
@@ -55,16 +58,13 @@
     <div id="stats"><div>Kalan: <b id="sLeft">0</b></div><div>Elenen: <b id="sOut">0</b></div><div>⏱ <b id="sTime">05:00</b></div></div>
   </header>
   <div id="banner" class="hide"></div>
-  <div id="wrap"><canvas id="cv"></canvas><div id="feed"></div><div id="big"></div></div>
+  <div id="arrow">➜</div><div id="wrap"><canvas id="cv"></canvas><div id="feed"></div><div id="big"></div></div>
   <div id="ctrl">
     <div id="side">
       <button class="b" id="bHostMenu">👥 Oyuncular</button>
       <button class="b g" id="bStart">▶ Başlat</button>
     </div>
-    <div id="pad">
-      <div></div><div class="k" data-d="0,-1">▲</div><div></div>
-      <div class="k" data-d="-1,0">◀</div><div class="k" data-d="0,1">▼</div><div class="k" data-d="1,0">▶</div>
-    </div>
+    <div id="hint">👆 Parmağını ekranda kaydırarak yönlendir</div>
   </div>
 </div>
 
@@ -195,11 +195,24 @@ function reverseIfWanted(e){ // turn around mid-tile
 
 // ---------- input ----------
 let onDir=()=>{};
-document.querySelectorAll('.k').forEach(k=>{const d=k.dataset.d.split(',').map(Number);
-  k.addEventListener('pointerdown',e=>{e.preventDefault();onDir(d);k.classList.add('on');setTimeout(()=>k.classList.remove('on'),150)})});
 addEventListener('keydown',e=>{const m={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0],w:[0,-1],s:[0,1],a:[-1,0],d:[1,0]}[e.key];if(m){onDir(m);e.preventDefault()}});
-let sw=null;cv.addEventListener('pointerdown',e=>sw=[e.clientX,e.clientY]);
-cv.addEventListener('pointerup',e=>{if(!sw)return;const dx=e.clientX-sw[0],dy=e.clientY-sw[1];sw=null;if(Math.max(Math.abs(dx),Math.abs(dy))<20)return;onDir(Math.abs(dx)>Math.abs(dy)?[Math.sign(dx),0]:[0,Math.sign(dy)])});
+// touch: put finger anywhere and slide; every new slide direction turns the character
+let sw=null,lastDir=null,arrowT=0;
+const arrowEl=document.getElementById('arrow');
+function showArrow(d,x,y){const a={'1,0':0,'0,1':90,'-1,0':180,'0,-1':270}[d.join(',')];
+  arrowEl.style.left=x+'px';arrowEl.style.top=y+'px';arrowEl.style.transform=`translate(-50%,-50%) rotate(${a}deg)`;arrowEl.style.opacity=.85;clearTimeout(arrowT);arrowT=setTimeout(()=>arrowEl.style.opacity=0,350)}
+document.addEventListener('pointerdown',e=>{if(e.target.closest('button,input,.ov'))return;sw={x:e.clientX,y:e.clientY,id:e.pointerId}});
+document.addEventListener('pointermove',e=>{
+  if(!sw||e.pointerId!==sw.id)return;
+  const dx=e.clientX-sw.x,dy=e.clientY-sw.y;
+  if(Math.max(Math.abs(dx),Math.abs(dy))<18)return;
+  const d=Math.abs(dx)>Math.abs(dy)?[Math.sign(dx),0]:[0,Math.sign(dy)];
+  sw.x=e.clientX;sw.y=e.clientY;sw.moved=true;
+  if(!lastDir||lastDir[0]!==d[0]||lastDir[1]!==d[1]||true){onDir(d);showArrow(d,e.clientX,e.clientY)}
+  lastDir=d;
+},{passive:true});
+const endSw=e=>{if(sw&&e.pointerId===sw.id)sw=null};
+document.addEventListener('pointerup',endSw);document.addEventListener('pointercancel',endSw);
 
 const palette=['#4f8cff','#ff6fb5','#36c97a','#ffc83d','#a873ff','#ff8a3d','#3dd6e0','#e8e8e8','#9be15d','#ff5d5d','#c7a17a','#7ad1ff'];
 
@@ -327,7 +340,7 @@ function startHost(){
     if(phase==='count'){const prev=Math.ceil(count);count-=dt;const c=Math.ceil(count);
       if(c!==prev&&c>0){beep(c<=3?880:600,.1,c<=3?.18:.08);banner()}
       if(count<=0){for(const p of list(['in']))if(!p.placed)place(p,null);
-        phase='play';big('');banner();beep(990,.25,.18);feed('🔒 Katılım kapandı');feed('Ebe kovalamaya başladı!');broadcast({t:'closed'})}
+        phase='play';big('');banner();beep(990,.25,.18);feed('🔒 Katılım kapandı');feed('Ebe kovalamaya başladı! Parmağını kaydırarak yönet.');broadcast({t:'closed'})}
       else big(c<=3?String(c):'',c<=3?'Hazır olun!':'')}
     if(phase==='play'){
       stepEnt(ebe,dt);
@@ -357,7 +370,7 @@ function startPlayer(name){
   $('err').textContent='Oyuna bağlanılıyor…';$('bJoin').disabled=true;
   const peer=new Peer(undefined,{debug:0});
   let pc=0,rejected=false,counts=[0,0],conn=null,me=null,roster=new Map(),view={phase:'lobby',ebe:null,players:[],me:-1},target=new Map(),ebeT=null,tl=GAME_TIME,status='connecting',gotAny=false,placed=false,hint=null;
-  $('side').classList.add('hide');
+  $('side').classList.add('hide');$('hint').style.display='block';
   const fail=t=>{$('err').textContent=t;$('bJoin').disabled=false;try{peer.destroy()}catch(e){}};
   const tmo=setTimeout(()=>{if(!gotAny)fail('Oyuna bağlanılamadı. Yayıncı oyunu açmamış olabilir ya da internetin buna izin vermiyor olabilir. Wi-Fi / mobil veri değiştirip tekrar dene.')},15000);
   peer.on('error',e=>{if(!gotAny){clearTimeout(tmo);fail(e.type==='peer-unavailable'?'Şu an açık oyun yok. Yayıncı oyunu açınca tekrar dene.':'Bağlantı hatası: '+(e.type||e))}else feed('Bağlantı sorunu…')});
@@ -366,7 +379,7 @@ function startPlayer(name){
     else if(view.phase==='count')b.innerHTML=`⏳ <span style="font-size:24px">${pc}</span> sn – ${placed?'Yerin hazır, istersen değiştir!':'👇 Başlamak istediğin yere dokun!'}`;
     else if(!placed)b.textContent='👇 Labirentte başlamak istediğin yere dokun! (Oyun başlayınca katılım kapanır)';
     else if(view.phase==='lobby')b.textContent='Yerin hazır! İstersen başka yere dokunup değiştir. Yayıncının başlatması bekleniyor…';
-    else b.textContent='Sen parlayan "SEN" karakterisin. Yön tuşlarıyla ebeden kaç!'};
+    else b.textContent='Sen parlayan "SEN" karakterisin. Parmağını kaydırarak ebeden kaç!'};
   peer.on('open',()=>{
     conn=peer.connect(ROOM,{reliable:false,serialization:'json'});
     conn.on('open',()=>conn.send({t:'hello',name}));
